@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>آزمایش دوم اتصال</title>
+<style>
+:root{color-scheme:light dark;--bg:#f3f7f5;--fg:#17302a;--card:#fff;--line:#d5e2dc;--ok:#1a7f4b;--warn:#b26a00;--bad:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1a17;--fg:#e4efe9;--card:#16241f;--line:#2a3d36;--ok:#4cc38a;--warn:#e0a040;--bad:#ef6a5a}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 Vazirmatn,Tahoma,sans-serif;padding:16px}
+main{max-width:640px;margin:auto}
+h1{font-size:1.25rem;margin:.2em 0}
+p{margin:.4em 0}
+button{font:inherit;min-height:44px;padding:0 18px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+button.go{background:var(--ok);color:#fff;border-color:transparent}
+.row{display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:8px 0}
+.row b{flex:1}
+.row small{display:block;opacity:.8;direction:ltr;text-align:left;word-break:break-all}
+.s{min-width:3.2em;text-align:center;font-weight:700}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+textarea{width:100%;min-height:160px;box-sizing:border-box;direction:ltr;font:12px monospace;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:8px}
+#sum{font-weight:700}
+</style>
+</head>
+<body>
+<main>
+<h1>آزمایش اتصال (Vercel)</h1>
+<p>این صفحه بررسی می‌کند دانلود تکه‌های کوچک (۵ و ۴۰ کیلوبایتی) روی شبکهٔ شما بهتر از یک‌جا کار می‌کند یا نه. حدود ۲ تا ۳ دقیقه طول می‌کشد. ترجیحاً بدون VPN و در پنجرهٔ ناشناس اجرا کنید.</p>
+<p><button class="go" id="go">شروع آزمایش</button></p>
+<p id="prog" style="opacity:.8"></p>
+<div id="list"></div>
+<p id="sum"></p>
+<div id="out" hidden>
+<p>گزارش را کپی کنید و برای مدیر بفرستید:</p>
+<textarea id="rep" readonly></textarea>
+<p><button id="copy">کپی گزارش</button> <button id="send">ارسال خودکار به مدیر</button> <span id="msg"></span></p>
+</div>
+</main>
+<script>
+(function(){
+var $=function(q){return document.querySelector(q)};
+var R={t:new Date().toISOString(),tests:[],summary:''};
+function row(name,status,detail,data){
+  var d=document.createElement('div');d.className='row';
+  var c=status==='OK'?'ok':status==='WARN'?'warn':'bad';
+  d.innerHTML='<span class="s '+c+'">'+status+'</span><b>'+name+'<small></small></b>';
+  d.querySelector('small').textContent=detail;
+  $('#list').appendChild(d);R.tests.push({name:name,status:status,detail:detail,data:data});
+}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
+var uid=Date.now();
+async function chunk(kb,to){
+  var t0=performance.now(),ctl=new AbortController(),got=0,tm=setTimeout(function(){ctl.abort()},to);
+  try{
+    var r=await fetch('/b/'+kb+'.bin?r='+(uid++),{signal:ctl.signal,cache:'no-store'});
+    var rd=r.body.getReader();
+    for(;;){var x=await rd.read();if(x.done)break;got+=x.value.length}
+    clearTimeout(tm);
+    return {ok:got>=kb*1024,ms:Math.round(performance.now()-t0),got:got};
+  }catch(e){clearTimeout(tm);return {ok:false,ms:Math.round(performance.now()-t0),got:got,err:String(e).slice(0,40)}}
+}
+function prog(t){$('#prog').textContent=t}
+async function seq(label,kb,n,to,retries,stopAfter){prog('در حال اجرا: '+label);
+  var res=[],total=0,firstFail=null,fails=0,cons=0;
+  for(var i=0;i<n;i++){
+    var tries=0,r;
+    do{r=await chunk(kb,to);tries++;if(!r.ok){total+=r.got}}while(!r.ok&&tries<=retries);
+    if(r.ok){total+=kb*1024;cons=0}else{fails++;cons++;if(firstFail===null)firstFail=i+1}
+    res.push({i:i+1,ok:r.ok,tries:tries,ms:r.ms,got:r.got});
+    if(cons>=stopAfter)break;
+  }
+  var okc=res.filter(function(x){return x.ok}).length;
+  var retried=res.filter(function(x){return x.tries>1}).length;
+  var st=okc===n?'OK':okc>0?'WARN':'FAIL';
+  row(label,st,'موفق '+okc+' از '+n+' | کل دریافت‌شده ≈ '+Math.round(total/1024)+'KB | اولین شکست: '+(firstFail||'ندارد')+' | تکه‌هایی که تلاش دوباره خواستند: '+retried+' | زمان کل: '+Math.round(res.reduce(function(a,x){return a+x.ms},0)/1000)+'s',res);
+  return {okc:okc,n:n,total:total,retried:retried};
+}
+$('#go').addEventListener('click',async function(){
+  this.disabled=true;$('#list').innerHTML='';R.tests=[];
+  var n=navigator.connection||{};
+  row('اطلاعات','OK',(n.effectiveType||'?')+' | rtt='+(n.rtt||'?')+'ms | '+navigator.userAgent.slice(0,90));
+  try{var c0=new AbortController(),t0=setTimeout(function(){c0.abort()},8000);await fetch('/b/5.bin?i='+Date.now(),{cache:'no-store',signal:c0.signal});clearTimeout(t0);row('شبکه','OK','ping ok')}catch(e){row('شبکه','FAIL','ping failed (مهلت ۸ ثانیه)')}
+  var a=await seq('الف) ۱۰ تکهٔ ۴۰ کیلوبایتی پشت‌سرهم (با ۲ بار تلاش دوباره، مهلت ۱۰ ثانیه)',40,10,10000,2,3);
+  await sleep(8000);
+  var b=await seq('ب) ۲۰ تکهٔ ۵ کیلوبایتی پشت‌سرهم (بعد از ۸ ثانیه استراحت)',5,20,8000,0,3);
+  await sleep(8000);
+  prog('در حال اجرا: آزمایش ج');var par=[];for(var i=0;i<6;i++)par.push(chunk(40,15000));
+  var pr=await Promise.all(par);var pok=pr.filter(function(x){return x.ok}).length;
+  row('ج) ۶ تکهٔ ۴۰ کیلوبایتی همزمان',pok===6?'OK':pok>0?'WARN':'FAIL','موفق '+pok+' از ۶ | دریافت‌شده: '+pr.map(function(x){return Math.round(x.got/1024)+'KB'}).join(', '),pr);
+  await sleep(5000);
+  prog('در حال اجرا: آزمایش د');var d=await chunk(300,20000);
+  row('د) یک فایل ۳۰۰ کیلوبایتی یک‌جا (برای مقایسه)',d.ok?'OK':'FAIL',(d.ok?'کامل':'ناقص')+' | '+Math.round(d.got/1024)+'KB در '+(d.ms/1000).toFixed(1)+'s',d);
+  prog('');var s;
+  if(a.okc===a.n&&b.okc===b.n)s='نتیجه: تکه‌تکه کردن کار می‌کند؛ همهٔ تکه‌ها رسیدند.';
+  else if(a.okc>0&&a.total>110*1024)s='نتیجه: با تلاش دوباره، بیش از سقف ۷۳ کیلوبایت دریافت شد؛ یعنی اتصال جدید سهم تازه می‌گیرد.';
+  else if(a.okc>0||b.okc>0)s='نتیجه: فقط بخشی از تکه‌ها رسید؛ سقف حدود '+Math.round(Math.max(a.total,b.total)/1024)+' کیلوبایت به‌نظر می‌رسد.';
+  else s='نتیجه: حتی تکه‌های کوچک هم نرسیدند؛ مشکل در مسیر شبکه است.';
+  R.summary=s;$('#sum').textContent=s;
+  $('#rep').value=JSON.stringify(R,null,1);$('#out').hidden=false;this.disabled=false;
+});
+$('#copy').addEventListener('click',function(){var t=$('#rep');t.select();try{navigator.clipboard.writeText(t.value);$('#msg').textContent='کپی شد'}catch(e){document.execCommand('copy');$('#msg').textContent='کپی شد'}});
+$('#send').addEventListener('click',function(){try{var ok=navigator.sendBeacon('/none',JSON.stringify({t:'report2',s:R.summary,tests:R.tests.map(function(x){return[x.status,x.name,x.detail]})}).slice(0,7500));$('#msg').textContent=ok?'ارسال شد':'ارسال نشد'}catch(e){$('#msg').textContent='ارسال نشد'}});
+})();
+</script>
+</body>
+</html>
